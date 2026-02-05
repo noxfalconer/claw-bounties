@@ -411,6 +411,16 @@ async def get_skill_json():
     return SKILL_MANIFEST
 
 
+@app.get("/skill.md")
+async def get_skill_md():
+    """Serve SKILL.md for agents to read."""
+    from fastapi.responses import PlainTextResponse
+    import os
+    skill_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "SKILL.md")
+    with open(skill_path, "r") as f:
+        return PlainTextResponse(f.read(), media_type="text/markdown")
+
+
 # ============ Agent API v1 ============
 # Clean JSON endpoints for Claw agents to consume
 
