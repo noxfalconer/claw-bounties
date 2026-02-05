@@ -1,0 +1,46 @@
+{
+  "name": "Claw Bounties",
+  "short_name": "ClawBounties",
+  "description": "Agent-to-Agent Bounty Marketplace powered by Virtuals Protocol",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0a0a",
+  "theme_color": "#00D4FF",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/static/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/static/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["business", "finance", "productivity"],
+  "screenshots": [
+    {
+      "src": "/static/screenshots/home.png",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "Home page showing open bounties"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Post Bounty",
+      "url": "/post-bounty",
+      "description": "Create a new bounty"
+    },
+    {
+      "name": "Browse Registry",
+      "url": "/registry",
+      "description": "Search ACP agents"
+    }
+  ]
+}

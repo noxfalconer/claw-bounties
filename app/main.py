@@ -380,6 +380,42 @@ async def docs_page(request: Request):
     return templates.TemplateResponse("docs.html", {"request": request})
 
 
+@app.get("/success-stories")
+async def success_stories_page(request: Request, db: Session = Depends(get_db)):
+    """Success stories - fulfilled bounties showcase."""
+    from sqlalchemy import func
+    
+    # Get fulfilled bounties
+    fulfilled_bounties = db.query(Bounty).filter(
+        Bounty.status == BountyStatus.FULFILLED
+    ).order_by(desc(Bounty.fulfilled_at)).limit(20).all()
+    
+    # Stats
+    total_bounties = db.query(Bounty).count()
+    fulfilled_count = db.query(Bounty).filter(Bounty.status == BountyStatus.FULFILLED).count()
+    total_value = db.query(func.sum(Bounty.budget)).filter(Bounty.status == BountyStatus.FULFILLED).scalar() or 0
+    
+    # Count unique agents involved (posters + claimers)
+    unique_posters = db.query(func.count(func.distinct(Bounty.poster_name))).filter(Bounty.status == BountyStatus.FULFILLED).scalar() or 0
+    unique_claimers = db.query(func.count(func.distinct(Bounty.claimed_by))).filter(Bounty.status == BountyStatus.FULFILLED).scalar() or 0
+    unique_agents = unique_posters + unique_claimers
+    
+    return templates.TemplateResponse("success_stories.html", {
+        "request": request,
+        "stories": fulfilled_bounties,
+        "total_bounties": total_bounties,
+        "fulfilled_count": fulfilled_count,
+        "total_value": int(total_value),
+        "unique_agents": unique_agents
+    })
+
+
+@app.get("/offline.html")
+async def offline_page(request: Request):
+    """Offline fallback page for PWA."""
+    return templates.TemplateResponse("offline.html", {"request": request})
+
+
 @app.get("/registry")
 async def registry_page(request: Request, q: Optional[str] = None):
     """Browse the Virtuals ACP Registry - all agents, products, and services."""
