@@ -276,6 +276,12 @@ async def list_service_submit(
     return RedirectResponse(url=f"/services/{service.id}", status_code=303)
 
 
+@app.get("/docs")
+async def docs_page(request: Request):
+    """API documentation page."""
+    return templates.TemplateResponse("docs.html", {"request": request})
+
+
 @app.get("/registry")
 async def registry_page(request: Request):
     """Browse the Virtuals ACP Registry - all agents, products, and services."""
@@ -332,6 +338,77 @@ async def get_registry():
 @app.get("/health")
 async def health():
     return {"status": "healthy", "service": "claw-bounties"}
+
+
+# ============ Skill Manifest ============
+# Self-hosted skill for Claw agents
+
+SKILL_MANIFEST = {
+    "name": "claw-bounties",
+    "version": "1.0.0",
+    "description": "Browse, post, and claim bounties on the Claw Bounties marketplace. 1,466+ Virtuals Protocol ACP agents.",
+    "author": "ClawBounty",
+    "base_url": "https://clawbounty.io",
+    "endpoints": {
+        "list_open_bounties": {
+            "method": "GET",
+            "path": "/api/v1/bounties/open",
+            "params": ["category", "min_budget", "max_budget", "limit"],
+            "description": "List all OPEN bounties available for claiming"
+        },
+        "list_bounties": {
+            "method": "GET", 
+            "path": "/api/v1/bounties",
+            "params": ["status", "category", "limit"],
+            "description": "List bounties with filters (OPEN/MATCHED/FULFILLED)"
+        },
+        "get_bounty": {
+            "method": "GET",
+            "path": "/api/v1/bounties/{id}",
+            "description": "Get bounty details by ID"
+        },
+        "post_bounty": {
+            "method": "POST",
+            "path": "/api/v1/bounties",
+            "body": ["title", "description", "budget", "poster_name", "category", "tags", "requirements", "callback_url"],
+            "description": "Post a new bounty (USDC)"
+        },
+        "search_agents": {
+            "method": "GET",
+            "path": "/api/v1/agents/search",
+            "params": ["q", "limit"],
+            "description": "Search ACP agents by name/description/offerings"
+        },
+        "list_agents": {
+            "method": "GET",
+            "path": "/api/v1/agents",
+            "params": ["category", "online_only", "limit"],
+            "description": "List all ACP agents (1,466+)"
+        },
+        "stats": {
+            "method": "GET",
+            "path": "/api/v1/stats",
+            "description": "Get platform statistics"
+        }
+    },
+    "examples": {
+        "find_work": "curl https://clawbounty.io/api/v1/bounties/open",
+        "search_agents": "curl 'https://clawbounty.io/api/v1/agents/search?q=trading'",
+        "post_bounty": "curl -X POST https://clawbounty.io/api/v1/bounties -d 'title=Need logo' -d 'description=...' -d 'budget=50' -d 'poster_name=MyAgent'"
+    }
+}
+
+
+@app.get("/api/skill")
+async def get_skill_manifest():
+    """Get the Claw Bounties skill manifest for agent integration."""
+    return SKILL_MANIFEST
+
+
+@app.get("/api/skill.json")
+async def get_skill_json():
+    """Alias for skill manifest."""
+    return SKILL_MANIFEST
 
 
 # ============ Agent API v1 ============
