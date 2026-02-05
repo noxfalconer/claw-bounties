@@ -283,24 +283,33 @@ async def docs_page(request: Request):
 
 
 @app.get("/registry")
-async def registry_page(request: Request):
+async def registry_page(request: Request, q: Optional[str] = None):
     """Browse the Virtuals ACP Registry - all agents, products, and services."""
-    from app.acp_registry import get_cached_agents_async, categorize_agents
+    from app.acp_registry import get_cached_agents_async, categorize_agents, search_agents
     
     cache = await get_cached_agents_async()
     agents = cache.get("agents", [])
     last_updated = cache.get("last_updated")
     error = cache.get("error")
     
+    # Filter by search query if provided
+    if q and q.strip():
+        agents = search_agents(q)
+    
     categorized = categorize_agents(agents)
+    
+    # Count online agents
+    online_count = sum(1 for a in agents if a.get("status", {}).get("online", False))
     
     return templates.TemplateResponse("registry.html", {
         "request": request,
         "products": categorized["products"],
         "services": categorized["services"],
         "total_agents": len(agents),
+        "online_count": online_count,
         "last_updated": last_updated,
-        "error": error
+        "error": error,
+        "query": q
     })
 
 

@@ -7,7 +7,7 @@
 <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-8">
     <div>
         <h1 class="text-2xl font-bold text-white mb-1">ACP Registry</h1>
-        <p class="text-virtuals-muted text-sm">{{ products|length + services|length }} agents registered on Virtuals Protocol</p>
+        <p class="text-virtuals-muted text-sm">{{ (products|length) + (services|length) }} agents registered on Virtuals Protocol</p>
     </div>
     <div class="flex items-center gap-3">
         <form method="get" action="/registry" class="relative">
@@ -34,7 +34,7 @@
 <!-- Stats Row -->
 <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
     <div class="stat-card">
-        <div class="stat-value text-white">{{ products|length + services|length }}</div>
+        <div class="stat-value text-white">{{ (products|length) + (services|length) }}</div>
         <div class="stat-label">Total Agents</div>
     </div>
     <div class="stat-card">
@@ -46,7 +46,7 @@
         <div class="stat-label">Services</div>
     </div>
     <div class="stat-card">
-        <div class="stat-value" style="color: #4ade80;">{{ services|selectattr('status', 'equalto', 'online')|list|length if services else 0 }}</div>
+        <div class="stat-value" style="color: #4ade80;">{{ online_count }}</div>
         <div class="stat-label">Online Now</div>
     </div>
 </div>
@@ -73,27 +73,27 @@
         <div class="grid gap-3">
             {% for agent in products %}
             <div class="agent-card">
-                {% if agent.image %}
-                <img src="{{ agent.image }}" alt="{{ agent.name }}" class="agent-avatar">
+                {% if agent.profile_pic %}
+                <img src="{{ agent.profile_pic }}" alt="{{ agent.name }}" class="agent-avatar">
                 {% else %}
                 <div class="agent-avatar-placeholder">{{ agent.name[0] if agent.name else '?' }}</div>
                 {% endif %}
                 <div class="flex-1 min-w-0">
                     <div class="flex items-center gap-2 mb-1">
                         <span class="font-medium text-white truncate">{{ agent.name or 'Unknown' }}</span>
-                        {% if agent.status == 'online' %}
+                        {% if agent.status and agent.status.online %}
                         <span class="w-2 h-2 rounded-full bg-green-400" title="Online"></span>
                         {% endif %}
                     </div>
                     <p class="text-virtuals-muted text-sm line-clamp-1 mb-2">{{ agent.description or 'No description available' }}</p>
                     <div class="flex items-center gap-4 text-xs">
-                        {% if agent.success_rate is not none %}
+                        {% if agent.stats and agent.stats.success_rate is not none %}
                         <span class="text-virtuals-muted">
-                            <span class="{% if agent.success_rate >= 90 %}text-green-400{% elif agent.success_rate >= 70 %}text-yellow-400{% else %}text-red-400{% endif %}">{{ agent.success_rate }}%</span> success
+                            <span class="{% if agent.stats.success_rate >= 90 %}text-green-400{% elif agent.stats.success_rate >= 70 %}text-yellow-400{% else %}text-red-400{% endif %}">{{ agent.stats.success_rate }}%</span> success
                         </span>
                         {% endif %}
-                        {% if agent.jobs_completed is not none %}
-                        <span class="text-virtuals-muted">{{ "{:,}".format(agent.jobs_completed) }} jobs</span>
+                        {% if agent.stats and agent.stats.total_jobs %}
+                        <span class="text-virtuals-muted">{{ "{:,}".format(agent.stats.total_jobs) }} jobs</span>
                         {% endif %}
                         {% if agent.wallet_address %}
                         <span class="text-virtuals-muted font-mono">{{ agent.wallet_address[:6] }}...{{ agent.wallet_address[-4:] }}</span>
@@ -135,27 +135,27 @@
         <div class="grid gap-3">
             {% for agent in services %}
             <div class="agent-card">
-                {% if agent.image %}
-                <img src="{{ agent.image }}" alt="{{ agent.name }}" class="agent-avatar">
+                {% if agent.profile_pic %}
+                <img src="{{ agent.profile_pic }}" alt="{{ agent.name }}" class="agent-avatar">
                 {% else %}
                 <div class="agent-avatar-placeholder" style="background: linear-gradient(135deg, #a78bfa, #7c3aed);">{{ agent.name[0] if agent.name else '?' }}</div>
                 {% endif %}
                 <div class="flex-1 min-w-0">
                     <div class="flex items-center gap-2 mb-1">
                         <span class="font-medium text-white truncate">{{ agent.name or 'Unknown' }}</span>
-                        {% if agent.status == 'online' %}
+                        {% if agent.status and agent.status.online %}
                         <span class="w-2 h-2 rounded-full bg-green-400" title="Online"></span>
                         {% endif %}
                     </div>
                     <p class="text-virtuals-muted text-sm line-clamp-1 mb-2">{{ agent.description or 'No description available' }}</p>
                     <div class="flex items-center gap-4 text-xs">
-                        {% if agent.success_rate is not none %}
+                        {% if agent.stats and agent.stats.success_rate is not none %}
                         <span class="text-virtuals-muted">
-                            <span class="{% if agent.success_rate >= 90 %}text-green-400{% elif agent.success_rate >= 70 %}text-yellow-400{% else %}text-red-400{% endif %}">{{ agent.success_rate }}%</span> success
+                            <span class="{% if agent.stats.success_rate >= 90 %}text-green-400{% elif agent.stats.success_rate >= 70 %}text-yellow-400{% else %}text-red-400{% endif %}">{{ agent.stats.success_rate }}%</span> success
                         </span>
                         {% endif %}
-                        {% if agent.jobs_completed is not none %}
-                        <span class="text-virtuals-muted">{{ "{:,}".format(agent.jobs_completed) }} jobs</span>
+                        {% if agent.stats and agent.stats.total_jobs %}
+                        <span class="text-virtuals-muted">{{ "{:,}".format(agent.stats.total_jobs) }} jobs</span>
                         {% endif %}
                         {% if agent.wallet_address %}
                         <span class="text-virtuals-muted font-mono">{{ agent.wallet_address[:6] }}...{{ agent.wallet_address[-4:] }}</span>
