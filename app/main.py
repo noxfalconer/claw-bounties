@@ -5,13 +5,19 @@ import logging
 from fastapi import FastAPI, Request, Depends, Form, Query, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from typing import Optional
 from dotenv import load_dotenv
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 logger = logging.getLogger(__name__)
+
+# Rate limiter setup
+limiter = Limiter(key_func=get_remote_address)
 
 from app.database import init_db, get_db
 from app.models import Bounty, Service, BountyStatus, generate_secret, verify_secret
@@ -24,6 +30,10 @@ app = FastAPI(
     description="A bounty marketplace for Claw Agents",
     version="0.1.0"
 )
+
+# Attach rate limiter to app
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Mount static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -133,6 +143,7 @@ async def bounty_detail(request: Request, bounty_id: int, db: Session = Depends(
 
 
 @app.post("/bounties/{bounty_id}/claim")
+@limiter.limit("10/minute")
 async def web_claim_bounty(
     request: Request,
     bounty_id: int,
@@ -181,6 +192,7 @@ async def web_claim_bounty(
 
 
 @app.post("/bounties/{bounty_id}/fulfill")
+@limiter.limit("10/minute")
 async def web_fulfill_bounty(
     request: Request,
     bounty_id: int,
@@ -288,6 +300,7 @@ async def post_bounty_form(request: Request):
 
 
 @app.post("/post-bounty")
+@limiter.limit("5/minute")
 async def post_bounty_submit(
     request: Request,
     poster_name: str = Form(...),
@@ -352,6 +365,7 @@ async def list_service_form(request: Request):
 
 
 @app.post("/list-service")
+@limiter.limit("5/minute")
 async def list_service_submit(
     request: Request,
     agent_name: str = Form(...),
@@ -495,7 +509,8 @@ async def agent_detail_page(request: Request, agent_id: int):
 
 
 @app.post("/api/registry/refresh")
-async def refresh_registry():
+@limiter.limit("2/minute")
+async def refresh_registry(request: Request):
     """Manually refresh the ACP registry cache."""
     from app.acp_registry import refresh_cache
     
@@ -658,7 +673,9 @@ async def get_skill_md():
 # Clean JSON endpoints for Claw agents to consume
 
 @app.get("/api/v1/bounties")
+@limiter.limit("60/minute")
 async def api_list_bounties(
+    request: Request,
     status: Optional[str] = None,
     category: Optional[str] = None,
     limit: int = Query(default=50, le=100),
@@ -707,7 +724,9 @@ async def api_list_bounties(
 
 
 @app.get("/api/v1/bounties/open")
+@limiter.limit("60/minute")
 async def api_open_bounties(
+    request: Request,
     category: Optional[str] = None,
     min_budget: Optional[float] = None,
     max_budget: Optional[float] = None,
@@ -756,7 +775,8 @@ async def api_open_bounties(
 
 
 @app.get("/api/v1/bounties/{bounty_id}")
-async def api_get_bounty(bounty_id: int, db: Session = Depends(get_db)):
+@limiter.limit("60/minute")
+async def api_get_bounty(request: Request, bounty_id: int, db: Session = Depends(get_db)):
     """Get a specific bounty by ID."""
     bounty = db.query(Bounty).filter(Bounty.id == bounty_id).first()
     if not bounty:
@@ -783,7 +803,9 @@ async def api_get_bounty(bounty_id: int, db: Session = Depends(get_db)):
 
 
 @app.post("/api/v1/bounties")
+@limiter.limit("10/minute")
 async def api_create_bounty(
+    request: Request,
     title: str = Form(...),
     description: str = Form(...),
     budget: float = Form(...),
@@ -845,7 +867,9 @@ async def api_create_bounty(
 
 
 @app.get("/api/v1/agents")
+@limiter.limit("30/minute")
 async def api_list_agents(
+    request: Request,
     category: Optional[str] = None,
     online_only: bool = False,
     limit: int = Query(default=100, le=500)
@@ -883,7 +907,9 @@ async def api_list_agents(
 
 
 @app.get("/api/v1/agents/search")
+@limiter.limit("30/minute")
 async def api_search_agents(
+    request: Request,
     q: str = Query(..., min_length=2),
     limit: int = Query(default=20, le=100)
 ):
