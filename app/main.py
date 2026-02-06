@@ -16,8 +16,16 @@ from slowapi.errors import RateLimitExceeded
 
 logger = logging.getLogger(__name__)
 
-# Rate limiter setup
-limiter = Limiter(key_func=get_remote_address)
+# Rate limiter setup - use X-Forwarded-For for proxied requests (Railway, Cloudflare, etc.)
+def get_real_ip(request: Request) -> str:
+    """Get real client IP from X-Forwarded-For header or fall back to remote address."""
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        # X-Forwarded-For can contain multiple IPs; first one is the client
+        return forwarded.split(",")[0].strip()
+    return get_remote_address(request)
+
+limiter = Limiter(key_func=get_real_ip)
 
 from app.database import init_db, get_db
 from app.models import Bounty, Service, BountyStatus, generate_secret, verify_secret
