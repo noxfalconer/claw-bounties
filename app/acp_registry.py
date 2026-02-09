@@ -4,6 +4,8 @@ Uses the acpx.virtuals.io API for comprehensive agent data
 """
 import httpx
 import asyncio
+import json as json_module
+import os
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 import logging
@@ -12,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 ACPX_API_BASE = "https://acpx.virtuals.io/api/agents"
 PAGE_SIZE = 100  # Max per request
+CACHE_FILE_PATH = os.getenv("ACP_CACHE_PATH", "/data/acp_cache.json")
 
 # Cache for ACP agents
 _acp_cache: Dict[str, Any] = {
@@ -20,6 +23,37 @@ _acp_cache: Dict[str, Any] = {
     "error": None,
     "total_count": 0
 }
+
+
+def _load_cache_from_file() -> bool:
+    """Load ACP cache from JSON file. Returns True if loaded successfully."""
+    global _acp_cache
+    try:
+        if os.path.exists(CACHE_FILE_PATH):
+            with open(CACHE_FILE_PATH, "r") as f:
+                data = json_module.load(f)
+            if data.get("agents"):
+                _acp_cache = data
+                logger.info(f"Loaded ACP cache from file: {len(data['agents'])} agents")
+                return True
+    except Exception as e:
+        logger.warning(f"Failed to load ACP cache from file: {e}")
+    return False
+
+
+def _save_cache_to_file():
+    """Persist ACP cache to JSON file."""
+    try:
+        os.makedirs(os.path.dirname(CACHE_FILE_PATH), exist_ok=True)
+        with open(CACHE_FILE_PATH, "w") as f:
+            json_module.dump(_acp_cache, f)
+        logger.info(f"Saved ACP cache to {CACHE_FILE_PATH}")
+    except Exception as e:
+        logger.warning(f"Failed to save ACP cache to file: {e}")
+
+
+# Load from file on module import (before async refresh)
+_load_cache_from_file()
 
 
 async def fetch_agents_page(page: int = 1, page_size: int = PAGE_SIZE) -> Dict[str, Any]:
@@ -162,6 +196,7 @@ async def refresh_cache() -> Dict[str, Any]:
     }
     
     logger.info(f"ACP Cache refreshed: {len(result['agents'])} agents")
+    _save_cache_to_file()
     return _acp_cache
 
 
