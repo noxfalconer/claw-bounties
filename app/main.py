@@ -1,4 +1,4 @@
-"""Claw Bounties — application setup, middleware, lifespan, and misc endpoints."""
+"""Claw Bounties — application setup, middleware, lifespan, and router mounting."""
 import os
 import uuid
 import asyncio
@@ -7,9 +7,9 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
 
-from fastapi import FastAPI, Request, Depends, Response
+from fastapi import FastAPI, Request, Depends
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse, PlainTextResponse, Response as RawResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, Response, FileResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -36,11 +36,14 @@ logger = logging.getLogger(__name__)
 
 # ---- Rate limiter ----
 
+
 def get_real_ip(request: Request) -> str:
+    """Extract the real client IP from X-Forwarded-For or fall back to remote address."""
     forwarded = request.headers.get("X-Forwarded-For")
     if forwarded:
         return forwarded.split(",")[0].strip()
     return get_remote_address(request)
+
 
 limiter = Limiter(key_func=get_real_ip)
 
@@ -80,8 +83,9 @@ async def _build_sitemap() -> str:
 
 # ---- Supervised background tasks ----
 
+
 async def supervised_task(name: str, coro_fn: Any, *args: Any) -> None:
-    """Run a coroutine forever, restarting on crash."""
+    """Run a coroutine forever, restarting on crash with a 30-second delay."""
     while True:
         try:
             await coro_fn(*args)
@@ -138,18 +142,19 @@ async def periodic_registry_refresh() -> None:
 
 # ---- Lifespan ----
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Application lifespan: init DB, start background tasks."""
     global _sitemap_cache
     init_db()
 
     from app.acp_registry import refresh_cache
-    asyncio.create_task(refresh_cache())
 
+    asyncio.create_task(refresh_cache())
     asyncio.create_task(supervised_task("registry_refresh", periodic_registry_refresh))
     asyncio.create_task(supervised_task("expire_bounties", expire_bounties_task))
 
-    # Build initial sitemap
     try:
         _sitemap_cache = await _build_sitemap()
     except Exception:
@@ -163,17 +168,21 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Claw Bounties",
     description="A bounty marketplace for Claw Agents",
-    version="0.3.0",
+    version="0.4.0",
     lifespan=lifespan,
 )
 
 # ---- Middleware ----
 
-HONEYPOT_PATHS = {"/wp-login.php", "/wp-admin", "/admin", "/index.php", "/.env", "/xmlrpc.php", "/wp-content"}
+HONEYPOT_PATHS = {
+    "/wp-login.php", "/wp-admin", "/admin", "/index.php",
+    "/.env", "/xmlrpc.php", "/wp-content",
+}
 
 
 @app.middleware("http")
 async def block_scanners(request: Request, call_next):
+    """Return 404 for common scanner/bot paths."""
     if request.url.path in HONEYPOT_PATHS:
         return JSONResponse(status_code=404, content={"error": "not found"})
     return await call_next(request)
@@ -195,6 +204,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
+    """Add security headers to all responses."""
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
@@ -206,6 +216,7 @@ async def add_security_headers(request: Request, call_next):
 
 @app.middleware("http")
 async def add_request_id(request: Request, call_next):
+    """Attach a unique request ID to every response."""
     request_id = request.headers.get("X-Request-ID", str(uuid.uuid4())[:8])
     response = await call_next(request)
     response.headers["X-Request-ID"] = request_id
@@ -219,10 +230,7 @@ app.include_router(bounties.router)
 app.include_router(services.router)
 app.include_router(web_router)
 
-
-# ---- Backward compat redirects for old /api/bounties/ and /api/services/ paths ----
-# The routers moved from /api/bounties -> /api/v1/bounties and /api/services -> /api/v1/services
-# Note: bounties.py and services.py are already at /api/v1/ now, so we add redirects for old paths.
+# ---- Backward compat redirects ----
 
 from fastapi import APIRouter as _AR
 
@@ -250,10 +258,21 @@ async def compat_services(request: Request, path: str) -> Any:
 app.include_router(_compat_router)
 
 
-# ---- Misc endpoints (not in a router) ----
+# ---- Misc endpoints ----
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    """Serve the favicon."""
+    favicon_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static", "favicon.ico")
+    if os.path.exists(favicon_path):
+        return FileResponse(favicon_path, media_type="image/x-icon")
+    return Response(status_code=204)
+
 
 @app.get("/health")
 async def health(db: Session = Depends(get_db)) -> dict[str, str]:
+    """Health check endpoint — verifies DB connectivity."""
     try:
         db.execute(text("SELECT 1"))
         db_status = "connected"
@@ -264,6 +283,7 @@ async def health(db: Session = Depends(get_db)) -> dict[str, str]:
 
 @app.get("/robots.txt")
 async def robots_txt() -> PlainTextResponse:
+    """Serve robots.txt for search engine crawlers."""
     return PlainTextResponse(
         "User-agent: *\nAllow: /\nDisallow: /api/\nSitemap: https://clawbounty.io/sitemap.xml\n"
     )
@@ -271,14 +291,16 @@ async def robots_txt() -> PlainTextResponse:
 
 @app.get("/sitemap.xml")
 async def sitemap_xml() -> RawResponse:
+    """Serve the auto-generated sitemap."""
     global _sitemap_cache
     if _sitemap_cache is None:
         _sitemap_cache = await _build_sitemap()
-    return RawResponse(content=_sitemap_cache, media_type="application/xml")
+    return Response(content=_sitemap_cache, media_type="application/xml")
 
 
 @app.get("/api/registry")
 async def get_registry() -> dict[str, Any]:
+    """Get the ACP agent registry, categorized into products and services."""
     from app.acp_registry import get_cached_agents_async, categorize_agents
 
     cache = await get_cached_agents_async()
@@ -295,6 +317,7 @@ async def get_registry() -> dict[str, Any]:
 @app.post("/api/registry/refresh")
 @limiter.limit("2/minute")
 async def refresh_registry(request: Request) -> dict[str, Any]:
+    """Force-refresh the ACP agent registry cache (rate-limited)."""
     from app.acp_registry import refresh_cache
 
     cache = await refresh_cache()
@@ -307,6 +330,7 @@ async def refresh_registry(request: Request) -> dict[str, Any]:
 
 @app.get("/api/skill")
 async def get_skill_manifest() -> dict[str, Any]:
+    """Return the machine-readable skill manifest for agent discovery."""
     agent_count = get_agent_count()
     return {
         "name": "claw-bounties",
@@ -334,7 +358,7 @@ async def get_skill_manifest() -> dict[str, Any]:
         "examples": {
             "find_work": "curl https://clawbounty.io/api/v1/bounties/open",
             "search_agents": "curl 'https://clawbounty.io/api/v1/agents/search?q=trading'",
-            "post_bounty": 'curl -X POST https://clawbounty.io/api/v1/bounties -H "Content-Type: application/json" -d \'{"title":"Need logo","description":"...","budget":50,"poster_name":"MyAgent"}\'',
+            "post_bounty": 'curl -X POST https://clawbounty.io/api/v1/bounties -H "Content-Type: application/json" -d \'{"title":"Need logo","description":"Design a logo for my project","budget":50,"poster_name":"MyAgent"}\'',
             "cancel_bounty": 'curl -X POST https://clawbounty.io/api/v1/bounties/123/cancel -H "Content-Type: application/json" -d \'{"poster_secret": "your_token"}\'',
         },
     }
@@ -342,11 +366,13 @@ async def get_skill_manifest() -> dict[str, Any]:
 
 @app.get("/api/skill.json")
 async def get_skill_json() -> dict[str, Any]:
+    """Return skill manifest as JSON (alias)."""
     return await get_skill_manifest()
 
 
 @app.get("/skill.md")
 async def get_skill_md() -> PlainTextResponse:
+    """Return the SKILL.md markdown file."""
     skill_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "SKILL.md")
     with open(skill_path, "r") as f:
         return PlainTextResponse(f.read(), media_type="text/markdown")
@@ -354,8 +380,11 @@ async def get_skill_md() -> PlainTextResponse:
 
 # ---- Error handlers ----
 
+
 @app.exception_handler(Exception)
 async def generic_exception_handler(request: Request, exc: Exception) -> Any:
+    """Catch-all error handler: JSON for API routes, HTML for web routes."""
+    logger.error(f"Unhandled exception on {request.url.path}: {exc}")
     if request.url.path.startswith("/api/"):
         return JSONResponse(status_code=500, content={"error": "Internal server error"})
     return templates.TemplateResponse("error.html", {"request": request, "error": str(exc)}, status_code=500)

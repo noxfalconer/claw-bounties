@@ -1,12 +1,20 @@
+"""API routes for service listing CRUD operations."""
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
-from typing import Optional
-from datetime import datetime
 
 from app.database import get_db
-from app.models import Service, Bounty, BountyStatus, generate_secret, verify_secret
-from app.schemas import ServiceCreate, ServiceResponse, ServiceList, ServiceCreatedResponse, ServiceUpdate, ServiceDelete
+from app.models import Service, verify_secret
+from app.schemas import (
+    ServiceCreate, ServiceResponse, ServiceList,
+    ServiceCreatedResponse, ServiceUpdate, ServiceDelete,
+)
+from app.services.service_service import (
+    create_service as svc_create_service,
+    auto_match_bounties,
+)
 
 router = APIRouter(prefix="/api/v1/services", tags=["services"])
 
@@ -15,16 +23,11 @@ router = APIRouter(prefix="/api/v1/services", tags=["services"])
 def create_service(service: ServiceCreate, db: Session = Depends(get_db)):
     """
     List a new service or resource.
-    After listing, checks for matching open bounties.
-    
-    Returns an agent_secret token - SAVE THIS! It's required to modify/delete the service.
+    Returns an agent_secret token — SAVE THIS! Required to modify/delete the service.
     """
-    # Generate auth secret for the agent
-    secret_token, secret_hash = generate_secret()
-    
-    db_service = Service(
+    db_service, secret_token = svc_create_service(
+        db,
         agent_name=service.agent_name,
-        agent_secret_hash=secret_hash,
         name=service.name,
         description=service.description,
         price=service.price,
@@ -33,52 +36,16 @@ def create_service(service: ServiceCreate, db: Session = Depends(get_db)):
         shipping_available=service.shipping_available,
         tags=service.tags,
         acp_agent_wallet=service.acp_agent_wallet,
-        acp_job_offering=service.acp_job_offering
+        acp_job_offering=service.acp_job_offering,
     )
-    db.add(db_service)
-    db.commit()
-    db.refresh(db_service)
-    
-    # Auto-match open bounties if ACP details provided
+
     if service.acp_agent_wallet and service.acp_job_offering:
-        _auto_match_bounties(db, db_service)
-    
+        auto_match_bounties(db, db_service)
+
     return ServiceCreatedResponse(
         service=ServiceResponse.model_validate(db_service),
-        agent_secret=secret_token
+        agent_secret=secret_token,
     )
-
-
-def _auto_match_bounties(db: Session, service: Service):
-    """Find and match open bounties that this service can fulfill."""
-    # Search for matching bounties by tags/category
-    open_bounties = db.query(Bounty).filter(
-        Bounty.status == BountyStatus.OPEN,
-        Bounty.category == service.category
-    ).all()
-    
-    service_tags = set(t.strip().lower() for t in (service.tags or "").split(",") if t.strip())
-    service_words = set(service.name.lower().split() + service.description.lower().split()[:20])
-    
-    for bounty in open_bounties:
-        bounty_tags = set(t.strip().lower() for t in (bounty.tags or "").split(",") if t.strip())
-        bounty_words = set(bounty.title.lower().split() + bounty.description.lower().split()[:20])
-        
-        # Check for tag overlap or keyword overlap
-        tag_match = len(service_tags & bounty_tags) > 0
-        word_match = len(service_words & bounty_words) >= 2
-        
-        if tag_match or word_match:
-            # Match this bounty
-            bounty.status = BountyStatus.MATCHED
-            bounty.matched_service_id = service.id
-            bounty.matched_acp_agent = service.acp_agent_wallet
-            bounty.matched_acp_job = service.acp_job_offering
-            bounty.matched_at = datetime.utcnow()
-            
-            # TODO: Notify bounty poster's Claw via callback_url
-    
-    db.commit()
 
 
 @router.get("/", response_model=ServiceList)
@@ -92,11 +59,10 @@ def list_services(
     acp_only: Optional[bool] = None,
     limit: int = Query(default=50, le=100),
     offset: int = 0,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """List services with optional filters."""
     query = db.query(Service).filter(Service.is_active == True)
-    
     if category:
         query = query.filter(Service.category == category)
     if min_price:
@@ -112,14 +78,13 @@ def list_services(
     if search:
         search_term = f"%{search}%"
         query = query.filter(
-            (Service.name.ilike(search_term)) | 
-            (Service.description.ilike(search_term)) |
-            (Service.tags.ilike(search_term))
+            (Service.name.ilike(search_term))
+            | (Service.description.ilike(search_term))
+            | (Service.tags.ilike(search_term))
         )
-    
+
     total = query.count()
     services = query.order_by(desc(Service.created_at)).offset(offset).limit(limit).all()
-    
     return ServiceList(services=services, total=total)
 
 
@@ -134,25 +99,18 @@ def get_service(service_id: int, db: Session = Depends(get_db)):
 
 @router.put("/{service_id}", response_model=ServiceResponse)
 def update_service(service_id: int, service_update: ServiceUpdate, db: Session = Depends(get_db)):
-    """
-    Update a service listing.
-    
-    Requires agent_secret for authentication.
-    """
+    """Update a service listing. Requires agent_secret."""
     service = db.query(Service).filter(Service.id == service_id).first()
     if not service:
         raise HTTPException(status_code=404, detail="Service not found")
-    
-    # Verify agent authentication
     if not verify_secret(service_update.agent_secret, service.agent_secret_hash):
         raise HTTPException(status_code=403, detail="Invalid agent_secret. Only the service owner can update it.")
-    
-    # Update only provided fields (excluding agent_secret)
-    update_data = service_update.model_dump(exclude={'agent_secret'}, exclude_unset=True)
+
+    update_data = service_update.model_dump(exclude={"agent_secret"}, exclude_unset=True)
     for key, value in update_data.items():
         if value is not None:
             setattr(service, key, value)
-    
+
     db.commit()
     db.refresh(service)
     return service
@@ -160,19 +118,13 @@ def update_service(service_id: int, service_update: ServiceUpdate, db: Session =
 
 @router.delete("/{service_id}")
 def deactivate_service(service_id: int, delete_request: ServiceDelete, db: Session = Depends(get_db)):
-    """
-    Deactivate a service listing.
-    
-    Requires agent_secret for authentication.
-    """
+    """Deactivate a service listing. Requires agent_secret."""
     service = db.query(Service).filter(Service.id == service_id).first()
     if not service:
         raise HTTPException(status_code=404, detail="Service not found")
-    
-    # Verify agent authentication
     if not verify_secret(delete_request.agent_secret, service.agent_secret_hash):
         raise HTTPException(status_code=403, detail="Invalid agent_secret. Only the service owner can delete it.")
-    
+
     service.is_active = False
     db.commit()
     return {"message": "Service deactivated"}

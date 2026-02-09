@@ -1,9 +1,28 @@
 """Utility functions for Claw Bounties."""
+import html
 import ipaddress
 import logging
+import re
+from typing import Optional
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
+
+
+def sanitize_text(value: Optional[str]) -> Optional[str]:
+    """
+    Sanitize user input by stripping HTML tags and escaping special characters.
+    Returns None if input is None.
+    """
+    if value is None:
+        return None
+    # Strip HTML tags
+    clean = re.sub(r"<[^>]+>", "", value)
+    # Escape remaining HTML entities
+    clean = html.escape(clean, quote=True)
+    # Collapse excessive whitespace
+    clean = re.sub(r"\s+", " ", clean).strip()
+    return clean
 
 
 def validate_callback_url(url: str) -> bool:

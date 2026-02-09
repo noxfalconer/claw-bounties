@@ -1,19 +1,28 @@
 """Web (HTML) routes for the Claw Bounties frontend."""
-import os
-import httpx
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from math import ceil
 from typing import Optional, Any
 
-from fastapi import APIRouter, Depends, Form, Request, BackgroundTasks, Query
+from fastapi import APIRouter, Depends, Form, Request, BackgroundTasks
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import desc, func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Bounty, BountyStatus, Service, generate_secret, verify_secret
+from app.models import Bounty, BountyStatus, Service, verify_secret
+from app.services.bounty_service import (
+    create_bounty,
+    claim_bounty,
+    fulfill_bounty,
+    get_bounty_by_id,
+    get_platform_stats,
+    search_acp_registry,
+    send_bounty_webhook,
+)
+from app.services.service_service import create_service, auto_match_bounties
+from app.utils import validate_callback_url
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["web"])
@@ -34,6 +43,7 @@ def get_agent_count() -> int:
 
 @router.get("/")
 async def home(request: Request, db: Session = Depends(get_db)) -> Any:
+    """Landing page with recent bounties and platform stats."""
     recent_bounties = (
         db.query(Bounty)
         .filter(Bounty.status == BountyStatus.OPEN)
@@ -41,12 +51,7 @@ async def home(request: Request, db: Session = Depends(get_db)) -> Any:
         .limit(6)
         .all()
     )
-    stats = {
-        "total_bounties": db.query(Bounty).count(),
-        "open_bounties": db.query(Bounty).filter(Bounty.status == BountyStatus.OPEN).count(),
-        "matched_bounties": db.query(Bounty).filter(Bounty.status == BountyStatus.MATCHED).count(),
-        "fulfilled_bounties": db.query(Bounty).filter(Bounty.status == BountyStatus.FULFILLED).count(),
-    }
+    stats = get_platform_stats(db)
     return templates.TemplateResponse(
         "home.html",
         {"request": request, "bounties": recent_bounties, "stats": stats, "agent_count": get_agent_count()},
@@ -62,6 +67,7 @@ async def bounties_page(
     page: int = 1,
     db: Session = Depends(get_db),
 ) -> Any:
+    """Paginated bounties listing with filters."""
     query = db.query(Bounty)
     if status:
         query = query.filter(Bounty.status == status)
@@ -92,7 +98,8 @@ async def bounties_page(
 
 @router.get("/bounties/{bounty_id}")
 async def bounty_detail(request: Request, bounty_id: int, db: Session = Depends(get_db)) -> Any:
-    bounty = db.query(Bounty).filter(Bounty.id == bounty_id).first()
+    """Bounty detail page with matching services and ACP agents."""
+    bounty = get_bounty_by_id(db, bounty_id)
     if not bounty:
         return templates.TemplateResponse("404.html", {"request": request}, status_code=404)
 
@@ -145,53 +152,31 @@ async def web_claim_bounty(
     claimer_callback_url: str = Form(None),
     db: Session = Depends(get_db),
 ) -> Any:
-    if claimer_callback_url:
-        from app.utils import validate_callback_url
+    """Handle web form bounty claiming."""
+    if claimer_callback_url and not validate_callback_url(claimer_callback_url):
+        return templates.TemplateResponse(
+            "error.html",
+            {"request": request, "error": "Invalid callback URL: private/internal addresses are not allowed."},
+            status_code=400,
+        )
 
-        if not validate_callback_url(claimer_callback_url):
-            return templates.TemplateResponse(
-                "error.html",
-                {"request": request, "error": "Invalid callback URL: private/internal addresses are not allowed."},
-                status_code=400,
-            )
-
-    bounty = db.query(Bounty).filter(Bounty.id == bounty_id).first()
+    bounty = get_bounty_by_id(db, bounty_id)
     if not bounty:
         return templates.TemplateResponse("404.html", {"request": request}, status_code=404)
     if bounty.status != BountyStatus.OPEN:
         return RedirectResponse(url=f"/bounties/{bounty_id}", status_code=303)
 
-    bounty.status = BountyStatus.CLAIMED
-    bounty.claimed_by = claimer_name
-    bounty.claimer_callback_url = claimer_callback_url
-    bounty.claimed_at = datetime.utcnow()
-    db.commit()
+    claim_bounty(db, bounty, claimer_name, claimer_callback_url)
 
     if bounty.poster_callback_url:
-        from app.utils import validate_callback_url as _validate
-
-        if _validate(bounty.poster_callback_url):
-
-            async def send_notification() -> None:
-                try:
-                    async with httpx.AsyncClient(timeout=10.0) as client:
-                        await client.post(
-                            bounty.poster_callback_url,
-                            json={
-                                "event": "bounty.claimed",
-                                "bounty": {
-                                    "id": bounty.id,
-                                    "title": bounty.title,
-                                    "budget_usdc": bounty.budget,
-                                    "claimed_by": claimer_name,
-                                    "status": "CLAIMED",
-                                },
-                            },
-                        )
-                except Exception as e:
-                    logger.error(f"Webhook failed: {e}")
-
-            background_tasks.add_task(send_notification)
+        bounty_data = {
+            "id": bounty.id,
+            "title": bounty.title,
+            "budget_usdc": bounty.budget,
+            "claimed_by": claimer_name,
+            "status": "CLAIMED",
+        }
+        background_tasks.add_task(send_bounty_webhook, bounty.poster_callback_url, "bounty.claimed", bounty_data)
 
     return RedirectResponse(url=f"/bounties/{bounty_id}", status_code=303)
 
@@ -204,7 +189,8 @@ async def web_fulfill_bounty(
     poster_secret: str = Form(...),
     db: Session = Depends(get_db),
 ) -> Any:
-    bounty = db.query(Bounty).filter(Bounty.id == bounty_id).first()
+    """Handle web form bounty fulfillment."""
+    bounty = get_bounty_by_id(db, bounty_id)
     if not bounty:
         return templates.TemplateResponse("404.html", {"request": request}, status_code=404)
 
@@ -218,25 +204,14 @@ async def web_fulfill_bounty(
     if bounty.status not in [BountyStatus.CLAIMED, BountyStatus.MATCHED]:
         return RedirectResponse(url=f"/bounties/{bounty_id}", status_code=303)
 
-    bounty.status = BountyStatus.FULFILLED
-    bounty.fulfilled_at = datetime.utcnow()
-    db.commit()
+    fulfill_bounty(db, bounty)
 
     bounty_data = {"id": bounty.id, "title": bounty.title, "budget_usdc": bounty.budget, "status": "FULFILLED"}
+    if bounty.poster_callback_url:
+        background_tasks.add_task(send_bounty_webhook, bounty.poster_callback_url, "bounty.fulfilled", bounty_data)
+    if bounty.claimer_callback_url:
+        background_tasks.add_task(send_bounty_webhook, bounty.claimer_callback_url, "bounty.fulfilled", bounty_data)
 
-    async def send_notifications() -> None:
-        from app.utils import validate_callback_url as _validate
-
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                if bounty.poster_callback_url and _validate(bounty.poster_callback_url):
-                    await client.post(bounty.poster_callback_url, json={"event": "bounty.fulfilled", "bounty": bounty_data})
-                if bounty.claimer_callback_url and _validate(bounty.claimer_callback_url):
-                    await client.post(bounty.claimer_callback_url, json={"event": "bounty.fulfilled", "bounty": bounty_data})
-        except Exception as e:
-            logger.error(f"Webhook failed: {e}")
-
-    background_tasks.add_task(send_notifications)
     return RedirectResponse(url=f"/bounties/{bounty_id}", status_code=303)
 
 
@@ -248,6 +223,7 @@ async def services_page(
     page: int = 1,
     db: Session = Depends(get_db),
 ) -> Any:
+    """Paginated services listing with filters."""
     query = db.query(Service).filter(Service.is_active == True)
     if category:
         query = query.filter(Service.category == category)
@@ -275,6 +251,7 @@ async def services_page(
 
 @router.get("/services/{service_id}")
 async def service_detail(request: Request, service_id: int, db: Session = Depends(get_db)) -> Any:
+    """Service detail page."""
     service = db.query(Service).filter(Service.id == service_id).first()
     if not service:
         return templates.TemplateResponse("404.html", {"request": request}, status_code=404)
@@ -283,6 +260,7 @@ async def service_detail(request: Request, service_id: int, db: Session = Depend
 
 @router.get("/post-bounty")
 async def post_bounty_form(request: Request) -> Any:
+    """Render the post-bounty form."""
     return templates.TemplateResponse("post_bounty.html", {"request": request})
 
 
@@ -299,17 +277,13 @@ async def post_bounty_submit(
     tags: str = Form(None),
     db: Session = Depends(get_db),
 ) -> Any:
-    if poster_callback_url:
-        from app.utils import validate_callback_url
-
-        if not validate_callback_url(poster_callback_url):
-            return templates.TemplateResponse(
-                "error.html",
-                {"request": request, "error": "Invalid callback URL: private/internal addresses are not allowed."},
-                status_code=400,
-            )
-
-    from app.routers.bounties import search_acp_registry
+    """Handle web form bounty creation — checks ACP first, then posts."""
+    if poster_callback_url and not validate_callback_url(poster_callback_url):
+        return templates.TemplateResponse(
+            "error.html",
+            {"request": request, "error": "Invalid callback URL: private/internal addresses are not allowed."},
+            status_code=400,
+        )
 
     search_query = f"{title} {tags or ''}"
     acp_result = await search_acp_registry(search_query)
@@ -320,24 +294,18 @@ async def post_bounty_submit(
             {"request": request, "title": title, "description": description, "budget": budget, "acp_result": acp_result},
         )
 
-    secret_token, secret_hash = generate_secret()
-
-    bounty = Bounty(
+    bounty, secret_token = create_bounty(
+        db,
         poster_name=poster_name,
-        poster_callback_url=poster_callback_url,
-        poster_secret_hash=secret_hash,
         title=title,
         description=description,
-        requirements=requirements,
         budget=budget,
         category=category,
+        requirements=requirements,
         tags=tags,
-        status=BountyStatus.OPEN,
-        expires_at=datetime.utcnow() + timedelta(days=30),
+        poster_callback_url=poster_callback_url,
+        set_expiry=True,
     )
-    db.add(bounty)
-    db.commit()
-    db.refresh(bounty)
 
     return templates.TemplateResponse(
         "bounty_created.html", {"request": request, "bounty": bounty, "poster_secret": secret_token}
@@ -346,6 +314,7 @@ async def post_bounty_submit(
 
 @router.get("/list-service")
 async def list_service_form(request: Request) -> Any:
+    """Render the list-service form."""
     return templates.TemplateResponse("list_service.html", {"request": request})
 
 
@@ -364,13 +333,10 @@ async def list_service_submit(
     acp_job_offering: str = Form(None),
     db: Session = Depends(get_db),
 ) -> Any:
-    from app.routers.services import _auto_match_bounties
-
-    secret_token, secret_hash = generate_secret()
-
-    service = Service(
+    """Handle web form service listing creation."""
+    service, secret_token = create_service(
+        db,
         agent_name=agent_name,
-        agent_secret_hash=secret_hash,
         name=name,
         description=description,
         price=price,
@@ -381,12 +347,9 @@ async def list_service_submit(
         acp_agent_wallet=acp_agent_wallet if acp_agent_wallet else None,
         acp_job_offering=acp_job_offering if acp_job_offering else None,
     )
-    db.add(service)
-    db.commit()
-    db.refresh(service)
 
     if acp_agent_wallet and acp_job_offering:
-        _auto_match_bounties(db, service)
+        auto_match_bounties(db, service)
 
     return templates.TemplateResponse(
         "service_created.html", {"request": request, "service": service, "agent_secret": secret_token}
@@ -395,11 +358,13 @@ async def list_service_submit(
 
 @router.get("/docs")
 async def docs_page(request: Request) -> Any:
+    """API documentation page."""
     return templates.TemplateResponse("docs.html", {"request": request})
 
 
 @router.get("/success-stories")
 async def success_stories_page(request: Request, db: Session = Depends(get_db)) -> Any:
+    """Success stories page showing fulfilled bounties."""
     fulfilled_bounties = (
         db.query(Bounty).filter(Bounty.status == BountyStatus.FULFILLED).order_by(desc(Bounty.fulfilled_at)).limit(20).all()
     )
@@ -428,11 +393,13 @@ async def success_stories_page(request: Request, db: Session = Depends(get_db)) 
 
 @router.get("/offline.html")
 async def offline_page(request: Request) -> Any:
+    """Offline fallback page for PWA."""
     return templates.TemplateResponse("offline.html", {"request": request})
 
 
 @router.get("/registry")
 async def registry_page(request: Request, q: Optional[str] = None, page: int = 1) -> Any:
+    """ACP agent registry browser with search and pagination."""
     from app.acp_registry import get_cached_agents_async, categorize_agents, search_agents
 
     cache = await get_cached_agents_async()
@@ -472,6 +439,7 @@ async def registry_page(request: Request, q: Optional[str] = None, page: int = 1
 
 @router.get("/agents/{agent_id}")
 async def agent_detail_page(request: Request, agent_id: int) -> Any:
+    """Individual ACP agent detail page."""
     from app.acp_registry import get_cached_agents_async
 
     cache = await get_cached_agents_async()

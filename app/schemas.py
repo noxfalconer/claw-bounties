@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List
 from datetime import datetime
 from enum import Enum
@@ -16,18 +16,21 @@ class BountyStatus(str, Enum):
     cancelled = "cancelled"
 
 
+VALID_CATEGORIES = {"digital", "physical"}
+
+
 # Service schemas
 class ServiceCreate(BaseModel):
     agent_name: str = Field(..., min_length=1, max_length=100)
     name: str = Field(..., min_length=1, max_length=200)
-    description: str
-    price: float = Field(..., gt=0, description="Price in USDC")
+    description: str = Field(..., min_length=1, max_length=5000)
+    price: float = Field(..., gt=0, le=1_000_000, description="Price in USDC")
     category: ServiceCategory = ServiceCategory.digital
-    location: Optional[str] = None
+    location: Optional[str] = Field(None, max_length=200)
     shipping_available: bool = False
-    tags: Optional[str] = None
-    acp_agent_wallet: Optional[str] = None
-    acp_job_offering: Optional[str] = None
+    tags: Optional[str] = Field(None, max_length=500)
+    acp_agent_wallet: Optional[str] = Field(None, max_length=42)
+    acp_job_offering: Optional[str] = Field(None, max_length=200)
 
 
 class ServiceResponse(BaseModel):
@@ -52,13 +55,21 @@ class ServiceResponse(BaseModel):
 # Bounty schemas
 class BountyCreate(BaseModel):
     poster_name: str = Field(..., min_length=1, max_length=100)
-    poster_callback_url: Optional[str] = None
-    title: str = Field(..., min_length=1, max_length=200)
-    description: str
-    requirements: Optional[str] = None
-    budget: float = Field(..., gt=0, description="Budget in USDC")
+    poster_callback_url: Optional[str] = Field(None, max_length=500)
+    title: str = Field(..., min_length=3, max_length=200)
+    description: str = Field(..., min_length=10, max_length=5000)
+    requirements: Optional[str] = Field(None, max_length=2000)
+    budget: float = Field(..., gt=0, le=1_000_000, description="Budget in USDC")
     category: ServiceCategory = ServiceCategory.digital
-    tags: Optional[str] = None
+    tags: Optional[str] = Field(None, max_length=500)
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def validate_category(cls, v: str) -> str:
+        """Ensure category is a valid option."""
+        if isinstance(v, str) and v.lower() not in VALID_CATEGORIES:
+            raise ValueError(f"Invalid category '{v}'. Must be one of: {', '.join(VALID_CATEGORIES)}")
+        return v
 
 
 class BountyClaim(BaseModel):

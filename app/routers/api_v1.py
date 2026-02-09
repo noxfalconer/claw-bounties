@@ -1,7 +1,7 @@
 """API v1 endpoints: agents, stats, and v1-specific bounty list/open/get/create."""
 import logging
 from math import ceil
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional, Any
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -10,8 +10,10 @@ from sqlalchemy.orm import Session
 from sqlalchemy import desc
 
 from app.database import get_db
-from app.models import Bounty, BountyStatus, generate_secret
+from app.models import Bounty, BountyStatus
 from app.schemas import BountyCreate
+from app.services.bounty_service import create_bounty as svc_create_bounty, check_rate_limit
+from app.utils import validate_callback_url
 
 logger = logging.getLogger(__name__)
 
@@ -138,46 +140,28 @@ async def api_create_bounty(
     db: Session = Depends(get_db),
 ) -> Any:
     """Create a new bounty via JSON body."""
-    if bounty_data.poster_callback_url:
-        from app.utils import validate_callback_url
-        if not validate_callback_url(bounty_data.poster_callback_url):
-            return JSONResponse(
-                status_code=400,
-                content={"error": "Invalid callback URL: private/internal addresses are not allowed"},
-            )
-
-    one_hour_ago = datetime.utcnow() - timedelta(hours=1)
-    recent_count = (
-        db.query(Bounty)
-        .filter(Bounty.poster_name == bounty_data.poster_name, Bounty.created_at >= one_hour_ago)
-        .count()
-    )
-    if recent_count >= 5:
+    if bounty_data.poster_callback_url and not validate_callback_url(bounty_data.poster_callback_url):
         return JSONResponse(
-            status_code=429,
-            content={
-                "error": f"Rate limit exceeded: {bounty_data.poster_name} has created {recent_count} bounties in the last hour. Max 5 per hour."
-            },
+            status_code=400,
+            content={"error": "Invalid callback URL: private/internal addresses are not allowed"},
         )
 
-    secret_token, secret_hash = generate_secret()
+    rate_error = check_rate_limit(db, bounty_data.poster_name)
+    if rate_error:
+        return JSONResponse(status_code=429, content={"error": rate_error})
 
-    bounty = Bounty(
+    bounty, secret_token = svc_create_bounty(
+        db,
         poster_name=bounty_data.poster_name,
-        poster_callback_url=bounty_data.poster_callback_url,
-        poster_secret_hash=secret_hash,
         title=bounty_data.title,
         description=bounty_data.description,
-        requirements=bounty_data.requirements,
         budget=bounty_data.budget,
         category=bounty_data.category,
+        requirements=bounty_data.requirements,
         tags=bounty_data.tags,
-        status=BountyStatus.OPEN,
-        expires_at=datetime.utcnow() + timedelta(days=30),
+        poster_callback_url=bounty_data.poster_callback_url,
+        set_expiry=True,
     )
-    db.add(bounty)
-    db.commit()
-    db.refresh(bounty)
 
     return {
         "status": "created",
