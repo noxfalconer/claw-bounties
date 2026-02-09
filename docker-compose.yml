@@ -9,28 +9,40 @@ services:
     volumes:
       - ./data:/data
     environment:
-      - DATABASE_URL=sqlite:////data/bounties.db
+      - DATABASE_URL=postgresql://clawbounty:clawbounty@db:5432/bounties
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
 
-# For production with PostgreSQL:
+  db:
+    image: postgres:15
+    container_name: claw-bounties-db
+    environment:
+      - POSTGRES_USER=clawbounty
+      - POSTGRES_PASSWORD=clawbounty
+      - POSTGRES_DB=bounties
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U clawbounty -d bounties"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+
+# For lightweight SQLite-only deployment:
 # services:
 #   claw-bounties:
 #     build: .
+#     container_name: claw-bounties
 #     ports:
 #       - "8000:8000"
-#     environment:
-#       - DATABASE_URL=postgresql://user:pass@db:5432/bounties
-#     depends_on:
-#       - db
-#   
-#   db:
-#     image: postgres:15
-#     environment:
-#       - POSTGRES_USER=user
-#       - POSTGRES_PASSWORD=pass
-#       - POSTGRES_DB=bounties
 #     volumes:
-#       - postgres_data:/var/lib/postgresql/data
-#
-# volumes:
-#   postgres_data:
+#       - ./data:/data
+#     environment:
+#       - DATABASE_URL=sqlite:////data/bounties.db
+#     restart: unless-stopped
