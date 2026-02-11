@@ -1,0 +1,10 @@
+.git
+.gitignore
+venv/
+__pycache__/
+*.pyc
+server.log
+*.db
+README.md
+SKILL.md
+tests/
