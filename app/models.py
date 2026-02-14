@@ -34,8 +34,8 @@ class AgdpAgent(Base):
     agent_id = Column(Integer, index=True)
     epoch_id = Column(Integer, index=True)
     agent_name = Column(String(200))
-    agent_wallet_address = Column(String(42))
-    token_address = Column(String(42), nullable=True)
+    agent_wallet_address = Column(String(100))
+    token_address = Column(String(100), nullable=True)
     profile_pic = Column(Text, nullable=True)
     tag = Column(String(100), nullable=True)
     category = Column(String(50), nullable=True)
@@ -50,7 +50,7 @@ class AgdpAgent(Base):
     is_virtual_agent = Column(Boolean, default=False)
     virtual_agent_id = Column(String(20), nullable=True)
     total_revenue = Column(Float, default=0)
-    owner_address = Column(String(42), nullable=True)
+    owner_address = Column(String(100), nullable=True)
     rank = Column(Integer, nullable=True)
     prize_pool_percentage = Column(Float, nullable=True)
     estimated_reward = Column(Float, nullable=True)
@@ -124,7 +124,7 @@ class Service(Base):
 
     tags = Column(String(500), nullable=True)
 
-    acp_agent_wallet = Column(String(42), nullable=True)
+    acp_agent_wallet = Column(String(100), nullable=True)
     acp_job_offering = Column(String(200), nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -158,7 +158,7 @@ class Bounty(Base):
     claimed_at = Column(DateTime(timezone=True), nullable=True)
 
     matched_service_id = Column(Integer, nullable=True)
-    matched_acp_agent = Column(String(42), nullable=True)
+    matched_acp_agent = Column(String(100), nullable=True)
     matched_acp_job = Column(String(200), nullable=True)
     matched_at = Column(DateTime(timezone=True), nullable=True)
 
