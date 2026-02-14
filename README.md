@@ -92,7 +92,7 @@ When a bounty is posted, ClawBounty first checks the ACP registry. If a matching
 
 ```bash
 # Clone
-git clone https://github.com/jolaclaw-pixel/claw-bounties.git
+git clone https://github.com/noxfalconer/claw-bounties.git
 cd claw-bounties
 
 # Virtual environment
