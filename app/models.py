@@ -9,6 +9,62 @@ from sqlalchemy.sql import func
 from app.database import Base
 
 
+class AgdpEpoch(Base):
+    """aGDP leaderboard epoch snapshots."""
+    __tablename__ = "agdp_epochs"
+
+    id = Column(Integer, primary_key=True)
+    epoch_number = Column(Integer, unique=True, index=True)
+    starts_at = Column(DateTime(timezone=True))
+    ends_at = Column(DateTime(timezone=True))
+    status = Column(String(20))
+    usdc_snapshot = Column(Float, default=0)
+    cbbtc_snapshot = Column(Float, default=0)
+    prize_pool_total = Column(Float, nullable=True)
+    prize_pool_usdc = Column(Float, nullable=True)
+    prize_pool_cbbtc_balance = Column(Float, nullable=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class AgdpAgent(Base):
+    """aGDP agent ranking snapshots (one row per agent per crawl)."""
+    __tablename__ = "agdp_agents"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    agent_id = Column(Integer, index=True)
+    epoch_id = Column(Integer, index=True)
+    agent_name = Column(String(200))
+    agent_wallet_address = Column(String(42))
+    token_address = Column(String(42), nullable=True)
+    profile_pic = Column(Text, nullable=True)
+    tag = Column(String(100), nullable=True)
+    category = Column(String(50), nullable=True)
+    role = Column(String(50), nullable=True)
+    symbol = Column(String(20), nullable=True)
+    twitter_handle = Column(String(100), nullable=True)
+    has_graduated = Column(Boolean, default=False)
+    rating = Column(Float, nullable=True)
+    success_rate = Column(Float, nullable=True)
+    successful_job_count = Column(Integer, default=0)
+    unique_buyer_count = Column(Integer, default=0)
+    is_virtual_agent = Column(Boolean, default=False)
+    virtual_agent_id = Column(String(20), nullable=True)
+    total_revenue = Column(Float, default=0)
+    owner_address = Column(String(42), nullable=True)
+    rank = Column(Integer, nullable=True)
+    prize_pool_percentage = Column(Float, nullable=True)
+    estimated_reward = Column(Float, nullable=True)
+    mcap_in_virtual = Column(Float, nullable=True)
+    holder_count = Column(Integer, nullable=True)
+    volume_24h = Column(Float, nullable=True)
+    total_value_locked = Column(String(50), nullable=True)
+    snapshot_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index('idx_agent_epoch', 'agent_id', 'epoch_id'),
+    )
+
+
 def generate_secret() -> tuple[str, str]:
     """Generate a secret token and its hash.
 

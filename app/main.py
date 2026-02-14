@@ -23,7 +23,7 @@ from app.constants import (
 )
 from app.database import init_db
 from app.middleware import register_middleware
-from app.routers import bounties, misc, services
+from app.routers import agdp, bounties, misc, services
 from app.routers.api_v1 import router as api_v1_router
 from app.routers.web import router as web_router, templates
 
@@ -101,6 +101,11 @@ async def lifespan(app: FastAPI):  # type: ignore[arg-type]
     asyncio.create_task(supervised_task("registry_refresh", periodic_registry_refresh))
     asyncio.create_task(supervised_task("expire_bounties", expire_bounties_task))
 
+    # aGDP crawler background task
+    if os.getenv("AGDP_CRAWLER_ENABLED", "true").lower() in ("true", "1", "yes"):
+        from app.agdp_crawler import agdp_crawler_loop
+        asyncio.create_task(supervised_task("agdp_crawler", agdp_crawler_loop))
+
     try:
         sitemap = await build_sitemap()
         set_sitemap_cache(sitemap)
@@ -147,6 +152,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 # ---- Include routers ----
 
 app.include_router(api_v1_router)
+app.include_router(agdp.router)
 app.include_router(bounties.router)
 app.include_router(services.router)
 app.include_router(misc.router)

@@ -31,7 +31,7 @@ def get_db():
 
 
 def init_db() -> None:
-    from app.models import Bounty, Service  # noqa
+    from app.models import AgdpAgent, AgdpEpoch, Bounty, Service  # noqa
     # In production (PostgreSQL), rely on Alembic migrations only.
     # Use create_all() as fallback for SQLite/dev environments.
     if DATABASE_URL.startswith("sqlite"):
